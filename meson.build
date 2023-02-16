@@ -98,6 +98,11 @@ if host_system == 'darwin'
   lib_src += files('src/decoder_vt.c')
 endif
 
+if host_system == 'windows'
+#  lib_src += files('src/decoder_mf_simple.c', 'src/decoder_mf.c')
+  lib_src += files('src/decoder_mf_simple.c')
+endif
+
 libsxplayer = library(
   'sxplayer',
   lib_src,
@@ -176,6 +181,7 @@ if get_option('tests')
     'next_frame',
     'notavail_file',
     'seek_after_eos',
+    'decoders',
   ]
 
   executables = {}
@@ -223,6 +229,13 @@ if get_option('tests')
     'Seek after EOS video+end+start':     {'test': 'seek_after_eos',    'args': [media, 0b101.to_string()]},
     'Seek after EOS video+start':         {'test': 'seek_after_eos',    'args': [media, 0b111.to_string()]},
   }
+  
+  if host_system == 'windows'
+    tests += {
+      'Decoder set':                      {'test': 'decoders',          'args': [media, 0b000.to_string()]},
+      'Decoder playback':                 {'test': 'decoders',          'args': [media, 0b001.to_string()]},
+    }
+  endif
 
   foreach use_pkt_duration : [0, 1]
     foreach test_name, test_data : tests

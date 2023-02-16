@@ -30,11 +30,15 @@
 
 extern const struct decoder sxpi_decoder_ffmpeg_sw;
 extern const struct decoder sxpi_decoder_ffmpeg_hw;
-static const struct decoder *decoder_def_software = &sxpi_decoder_ffmpeg_sw;
+extern const struct decoder sxpi_decoder_mediaf_sw;
+static const struct decoder *decoder_def_software = &sxpi_decoder_mediaf_sw;
+// RFJ static const struct decoder *decoder_def_software = &sxpi_decoder_ffmpeg_sw;
 
 #if __APPLE__
 extern const struct decoder sxpi_decoder_vt;
 static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_vt;
+#elif __WINDOWS__
+static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_mediaf_hw;
 #else
 static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_ffmpeg_hw;
 #endif

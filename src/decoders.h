@@ -34,6 +34,7 @@ struct decoder_ctx {
     const struct decoder *dec;
     void *priv_data;
     struct decoding_ctx *decoding_ctx;
+    AVStream *stream;
     void *opaque;
 };
 

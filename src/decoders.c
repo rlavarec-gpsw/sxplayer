@@ -64,6 +64,7 @@ int sxpi_decoder_init(void *log_ctx,
     if (HAVE_MEDIACODEC_HWACCEL && !strcmp(dec->name, "ffmpeg_hw"))
         ctx->avctx->pkt_timebase = stream->time_base;
 
+    ctx->stream = stream;
     ret = dec->init(ctx, opts);
     if (ret < 0) {
         if (dec->uninit)
