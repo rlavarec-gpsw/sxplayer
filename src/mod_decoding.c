@@ -28,17 +28,21 @@
 #include "msg.h"
 #include "log.h"
 
+#if defined(_WIN32)
+extern const struct decoder sxpi_decoder_mediaf_sw;
+extern const struct decoder sxpi_decoder_mediaf_hw;
+static const struct decoder *decoder_def_software = &sxpi_decoder_mediaf_sw;
+#else
 extern const struct decoder sxpi_decoder_ffmpeg_sw;
 extern const struct decoder sxpi_decoder_ffmpeg_hw;
-extern const struct decoder sxpi_decoder_mediaf_sw;
-static const struct decoder *decoder_def_software = &sxpi_decoder_mediaf_sw;
-// RFJ static const struct decoder *decoder_def_software = &sxpi_decoder_ffmpeg_sw;
+static const struct decoder *decoder_def_software = &sxpi_decoder_ffmpeg_sw;
+#endif
 
-#if __APPLE__
+#if defined(_WIN32)
+static const struct decoder* decoder_def_hwaccel = NULL; // &sxpi_decoder_mediaf_hw;
+#elif __APPLE__
 extern const struct decoder sxpi_decoder_vt;
 static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_vt;
-#elif __WINDOWS__
-static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_mediaf_hw;
 #else
 static const struct decoder *decoder_def_hwaccel = &sxpi_decoder_ffmpeg_hw;
 #endif

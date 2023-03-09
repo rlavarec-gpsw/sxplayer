@@ -282,6 +282,11 @@ static int initialize_modules_once(struct async_context *actx,
 
     TRACE(actx, "initialize modules");
 
+#if (defined(_WIN32) && defined(_DEBUG))
+     // while (!IsDebuggerPresent()) Sleep(100);
+#endif
+
+
     if ((ret = sxpi_demuxing_init(actx->log_ctx,
                                   actx->demuxer,
                                   actx->src_queue, actx->pkt_queue,

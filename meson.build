@@ -99,8 +99,7 @@ if host_system == 'darwin'
 endif
 
 if host_system == 'windows'
-#  lib_src += files('src/decoder_mf_simple.c', 'src/decoder_mf.c')
-  lib_src += files('src/decoder_mf_simple.c')
+  lib_src += files('src/decoder_mf.c')
 endif
 
 libsxplayer = library(
