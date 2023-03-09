@@ -1231,7 +1231,7 @@ void internal_free_mf(IMFTransform** mft)
 // Extend ffmpeg codec mapping for 
 //  case AV_CODEC_ID_MSMPEG4V2:  return &ff_MFVideoFormat_MP42;
 
-#pragma region ""ADAPTED_FROM_PAWELWEGNER""
+#pragma region "ADAPTED_FROM_PAWELWEGNER"
 static const CLSID* sx_ff_extended_codec_to_mf_subtype(enum AVCodecID id)
 {
     const CLSID* subtype = internal_codec_to_mf_subtype(id);
@@ -2154,7 +2154,7 @@ static int mfdec_init_sw(struct decoder_ctx *ctx, const struct sxplayer_opts *op
     int use_async_mft = 0;
 
 #if (defined(_WIN32) && defined(_DEBUG))
-    while (!IsDebuggerPresent()) Sleep(100);
+    // while (!IsDebuggerPresent()) Sleep(100);
 #endif
 
     avctx->thread_count = 0;
@@ -2394,46 +2394,15 @@ static int mf_free_media_buffer_ref(void* opaque) {
     return -1;
 }
 
-static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame, BOOL ref_only)
+static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AVFrame* frame, BYTE* data)
 {
-    MFDecoderContext* c = avctx->priv_data;
-    DWORD bufferCount;
-    IMFMediaBuffer* media_buffer;
-    DWORD buff_len;
-    HRESULT hr = IMFSample_ConvertToContiguousBuffer(sample, &media_buffer);
     int ret;
 
-    if (!FAILED(hr)) {
-        BYTE* data;
-        hr = IMFMediaBuffer_Lock(media_buffer, &data, NULL, &buff_len);
-
-        if (FAILED(hr)) {
-            IMFMediaBuffer_Release(media_buffer);
-            return AVERROR_EXTERNAL;
-        }
-
 #if defined(DEBUG)
-        int d0t1, d0t2;
-        d0t1 = frame->data[1] - frame->data[0];
-        d0t2 = frame->data[2] - frame->data[0];
-#endif
+    if (frame->data) {
+        int d0t1 = frame->data[1] - frame->data[0];
+        int d0t2 = frame->data[2] - frame->data[0];
 
-        if (!ref_only) {
-            // copy vs reference to sample buffer
-            memcpy(frame->data[0], data, buff_len);
-
-            IMFMediaBuffer_Unlock(media_buffer);
-            IMFMediaBuffer_Release(media_buffer);
-        }
-        else {
-            // Set the data pointers to the MFT locked sample buffer
-            // released later see: mf_free_media_buffer_ref and post_process_opaque
-            // NOTE: I am not completely sure this is the best approach to defer the buffer unlock and free,
-            //       but it seemed like an appropriate convention to use.
-            frame->data[0] = data;
-        }
-
-#if defined(DEBUG)
         int sz0 = d0t1;
         int sz1 = d0t2 - d0t1;
         int sz2 = buff_len - d0t2;
@@ -2465,9 +2434,58 @@ static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample
             desc->name, desc->alias,
             hshift, vshift,
             plane_linesz[0], plane_linesz[1], plane_linesz[2]);
+    }
 #endif
 
+    if (frame->data) {
+        int plane_linesz[4] = { 0 };
+        ptrdiff_t linesizes[4];
+        size_t ptrofs_sz[4];
+
+        // set the Y plane
+        frame->data[0] = data;
+
+        if ((ret = av_image_fill_linesizes(plane_linesz, frame->format, frame->width)) < 0)
+            return AVERROR_INVALIDDATA;
+
+        for (int i = 0; i < 4; i++) {
+            linesizes[i] = plane_linesz[i];
+        }
+
+        if ((ret = av_image_fill_plane_sizes(ptrofs_sz, avctx->pix_fmt, avctx->height, linesizes)) < 0)
+            return AVERROR_EXTERNAL;
+
+        int u_offset = ptrofs_sz[0] + 4 * plane_linesz[0];
+        int v_offset = u_offset + ptrofs_sz[1];
+
+        frame->data[1] = data + u_offset;
+        frame->data[2] = data + v_offset;
+    }
+
+    return ret;
+}
+
+static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame, BOOL ref_only)
+{
+    MFDecoderContext* c = avctx->priv_data;
+    DWORD bufferCount;
+    IMFMediaBuffer* media_buffer;
+    DWORD buff_len;
+    HRESULT hr = IMFSample_ConvertToContiguousBuffer(sample, &media_buffer);
+    int ret;
+
+    if (!FAILED(hr)) {
+        BYTE* data;
+        hr = IMFMediaBuffer_Lock(media_buffer, &data, NULL, &buff_len);
+
+        if (FAILED(hr)) {
+            IMFMediaBuffer_Release(media_buffer);
+            return AVERROR_EXTERNAL;
+        }
+
         if (ref_only) {
+            ret = mf_adjust_sample_frame_data_pointers(avctx, frame, data);
+
             FrameDecodeData* fdd = (FrameDecodeData*)frame->private_ref->data;
             MFFrameRef ref = {
                 .mf_buffer = media_buffer,
@@ -2476,6 +2494,12 @@ static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample
 
             fdd->post_process_opaque = av_buffer_ref(&ref);
             fdd->post_process_opaque_free = mf_free_media_buffer_ref;
+        } else {
+            // copy vs reference to sample buffer
+            memcpy(frame->data[0], data, buff_len);
+
+            IMFMediaBuffer_Unlock(media_buffer);
+            IMFMediaBuffer_Release(media_buffer);
         }
     }
 
