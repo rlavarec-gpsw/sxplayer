@@ -2465,7 +2465,7 @@ static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AV
     return ret;
 }
 
-static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame, BOOL ref_only)
+static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame)
 {
     MFDecoderContext* c = avctx->priv_data;
     DWORD bufferCount;
@@ -2483,24 +2483,16 @@ static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample
             return AVERROR_EXTERNAL;
         }
 
-        if (ref_only) {
-            ret = mf_adjust_sample_frame_data_pointers(avctx, frame, data);
+        ret = mf_adjust_sample_frame_data_pointers(avctx, frame, data);
 
-            FrameDecodeData* fdd = (FrameDecodeData*)frame->private_ref->data;
-            MFFrameRef ref = {
-                .mf_buffer = media_buffer,
-                .avcodec_ref = avctx,
-            };
+        FrameDecodeData* fdd = (FrameDecodeData*)frame->private_ref->data;
+        MFFrameRef ref = {
+            .mf_buffer = media_buffer,
+            .avcodec_ref = avctx,
+        };
 
-            fdd->post_process_opaque = av_buffer_ref(&ref);
-            fdd->post_process_opaque_free = mf_free_media_buffer_ref;
-        } else {
-            // copy vs reference to sample buffer
-            memcpy(frame->data[0], data, buff_len);
-
-            IMFMediaBuffer_Unlock(media_buffer);
-            IMFMediaBuffer_Release(media_buffer);
-        }
+        fdd->post_process_opaque = av_buffer_ref(&ref);
+        fdd->post_process_opaque_free = mf_free_media_buffer_ref;
     }
 
     return ret;
@@ -2512,23 +2504,13 @@ static int mf_sample_to_v_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
     av_frame_unref(frame);
 
     if ((ret = internal_get_buffer(avctx, frame, 0)) >= 0) {
-        frame->width = avctx->width;
-        frame->height = avctx->height;
-        frame->format = avctx->pix_fmt;
-        frame->channels = avctx->channels;
-        frame->channel_layout = avctx->channel_layout;
-
-        // Get the AVFrame buffer and copy/assign the MF sample buffer content
-        // NOTE: Setting the 'ref_only' parameter uses the locked IMFMediaSample buffer directly without a memcpy
-        //       !!! It is the ref_only mode where I am seeing bad chroma handing in HEVC decoded frames, aka "green tinted" rendering
         if ((ret = av_frame_get_buffer(frame, 0)) >= 0) {
-            ret = mf_copy_imfsample_to_avframe(avctx, sample, frame, TRUE); 
-
-            // logging result and chroma location from earlier debugging
-            av_log(avctx, AV_LOG_VERBOSE, "mf_sample_to_v_avframe - chroma-loc: %s (%d), result: %d\n", 
-                av_chroma_location_name(frame->chroma_location), frame->chroma_location, ret);
+            ret = mf_copy_imfsample_to_avframe(avctx, sample, frame); 
         }
     }
+
+    // logging result 
+    av_log(avctx, AV_LOG_VERBOSE, "mf_sample_to_v_avframe - set AVFrame from media buffer data, result: %d\n", ret);
 
     return ret;
 }
