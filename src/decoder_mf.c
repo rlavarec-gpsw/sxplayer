@@ -335,6 +335,7 @@ IMFSample *internal_create_memory_sample(void *fill_data, size_t size, size_t al
             IMFSample_Release(sample);
             return NULL;
         }
+
         memcpy(tmp, fill_data, size);
 
         IMFMediaBuffer_SetCurrentLength(buffer, size);
@@ -1351,21 +1352,19 @@ static IMFSample *mf_avpacket_to_sample(AVCodecContext *avctx, const AVPacket *a
 
             av_packet_unref(&tmp2);
         }
-        else {
-            // What now???
-            int a = -1;
-        }
 
-        sample = internal_create_memory_sample(tmp.data, tmp.size, c->in_info.cbAlignment);
-        if (sample) {
-            int64_t pts = (avpkt->pts != AV_NOPTS_VALUE) ? avpkt->pts : avpkt->dts;
+        if (tmp.data) {
+            sample = internal_create_memory_sample(tmp.data, tmp.size, c->in_info.cbAlignment);
+            if (sample) {
+                int64_t pts = (avpkt->pts != AV_NOPTS_VALUE) ? avpkt->pts : avpkt->dts;
 
-            if (pts != AV_NOPTS_VALUE) {
-                LONGLONG stime = av_rescale_q(pts, mf_get_timebase(avctx), MF_TIMEBASE);
-                IMFSample_SetSampleTime(sample, stime);
+                if (pts != AV_NOPTS_VALUE) {
+                    LONGLONG stime = av_rescale_q(pts, mf_get_timebase(avctx), MF_TIMEBASE);
+                    IMFSample_SetSampleTime(sample, stime);
+                }
+                if (avpkt->flags & AV_PKT_FLAG_KEY)
+                    IMFSample_SetUINT32(sample, &MFSampleExtension_CleanPoint, TRUE);
             }
-            if (avpkt->flags & AV_PKT_FLAG_KEY)
-                IMFSample_SetUINT32(sample, &MFSampleExtension_CleanPoint, TRUE);
         }
     }
 
@@ -2349,21 +2348,43 @@ static int mf_sample_to_a_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
     return 0;
 }
 
-static void fill_yuv_image(uint8_t* data[4], int linesize[4],
-    int width, int height, int frame_index)
+static void fill_frame_yuv_image(AVFrame* frame, int frame_index)
 {
+    int linesize[4] = { 0 };
+    int width, height, ret;
     int x, y;
+    ptrdiff_t linesizes[4];
+    size_t ptrofs_sz[4];
+
+    width = frame->width;
+    height = frame->height;
+
+    if ((ret = av_image_fill_linesizes(linesize, frame->format, width)) < 0)
+        return AVERROR_INVALIDDATA;
+
+    for (int i = 0; i < 4; i++) {
+        linesizes[i] = linesize[i];
+    }
+
+    if ((ret = av_image_fill_plane_sizes(ptrofs_sz, frame->format, height, linesizes)) < 0)
+        return AVERROR_EXTERNAL;
+
+    int u_offset = ptrofs_sz[0] + 4 * linesize[0];
+    int v_offset = u_offset + ptrofs_sz[1];
+
+    frame->data[1] = frame->data[0] + u_offset;
+    frame->data[2] = frame->data[0] + v_offset;
 
     /* Y */
     for (y = 0; y < height; y++)
         for (x = 0; x < width; x++)
-            data[0][y * linesize[0] + x] = x + y + frame_index * 3;
+            frame->data[0][y * linesize[0] + x] = x + y + frame_index * 3;
 
     /* Cb and Cr */
     for (y = 0; y < height / 2; y++) {
         for (x = 0; x < width / 2; x++) {
-            data[1][y * linesize[1] + x] = 128 + y + frame_index * 2;
-            data[2][y * linesize[2] + x] = 64 + x + frame_index * 5;
+            frame->data[1][y * linesize[1] + x] = 128 + y + frame_index * 2;
+            frame->data[2][y * linesize[2] + x] = 64 + x + frame_index * 5;
         }
     }
 }
@@ -2384,14 +2405,9 @@ static int mf_free_media_buffer_ref(void* opaque) {
         IMFMediaBuffer_Release(media_buffer);
 
         av_log(ref->avcodec_ref, AV_LOG_VERBOSE, "mf_free_media_buffer_ref - freed media buffer\n");
-
-        // av_buffer_unref(frame);
-        // av_free(ref);
-
-        return 0;
     }
 
-    return -1;
+    return 0;
 }
 
 static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AVFrame* frame, BYTE* data)
@@ -2437,13 +2453,12 @@ static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AV
     }
 #endif
 
-    if (frame->data) {
+    if (frame->data && data) {
+        frame->data[0] = data;
+
         int plane_linesz[4] = { 0 };
         ptrdiff_t linesizes[4];
         size_t ptrofs_sz[4];
-
-        // set the Y plane
-        frame->data[0] = data;
 
         if ((ret = av_image_fill_linesizes(plane_linesz, frame->format, frame->width)) < 0)
             return AVERROR_INVALIDDATA;
@@ -2458,8 +2473,8 @@ static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AV
         int u_offset = ptrofs_sz[0] + 4 * plane_linesz[0];
         int v_offset = u_offset + ptrofs_sz[1];
 
-        frame->data[1] = data + u_offset;
-        frame->data[2] = data + v_offset;
+        frame->data[1] = frame->data[0] + u_offset;
+        frame->data[2] = frame->data[0] + v_offset;
     }
 
     return ret;
@@ -2502,16 +2517,13 @@ static int mf_sample_to_v_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
 {
     int ret = 0;
     av_frame_unref(frame);
-
+    
     if ((ret = internal_get_buffer(avctx, frame, 0)) >= 0) {
-        if ((ret = av_frame_get_buffer(frame, 0)) >= 0) {
-            ret = mf_copy_imfsample_to_avframe(avctx, sample, frame); 
-        }
+        ret = mf_copy_imfsample_to_avframe(avctx, sample, frame);
     }
 
     // logging result 
     av_log(avctx, AV_LOG_VERBOSE, "mf_sample_to_v_avframe - set AVFrame from media buffer data, result: %d\n", ret);
-
     return ret;
 }
 
@@ -2710,6 +2722,7 @@ static int mfdec_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
 
     if (sample)
         IMFSample_Release(sample);
+
     return ret;
 }
 
