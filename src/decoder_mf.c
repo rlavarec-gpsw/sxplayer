@@ -2348,7 +2348,7 @@ static int mf_sample_to_a_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
     return 0;
 }
 
-static void fill_frame_yuv_image(AVFrame* frame, int frame_index)
+static int fill_frame_yuv_image(AVFrame* frame, int frame_index)
 {
     int linesize[4] = { 0 };
     int width, height, ret;
@@ -2387,6 +2387,8 @@ static void fill_frame_yuv_image(AVFrame* frame, int frame_index)
             frame->data[2][y * linesize[2] + x] = 64 + x + frame_index * 5;
         }
     }
+
+    return 0;
 }
 
 typedef struct frame_ref {
@@ -2405,110 +2407,75 @@ static int mf_free_media_buffer_ref(void* opaque) {
         IMFMediaBuffer_Release(media_buffer);
 
         av_log(ref->avcodec_ref, AV_LOG_VERBOSE, "mf_free_media_buffer_ref - freed media buffer\n");
+
+        av_free(opaque);
     }
 
     return 0;
 }
 
-static inline int mf_adjust_sample_frame_data_pointers(AVCodecContext* avctx, AVFrame* frame, BYTE* data)
+static int mf_set_avframe_data_from_sample(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame)
 {
-    int ret;
-
-#if defined(DEBUG)
-    if (frame->data) {
-        int d0t1 = frame->data[1] - frame->data[0];
-        int d0t2 = frame->data[2] - frame->data[0];
-
-        int sz0 = d0t1;
-        int sz1 = d0t2 - d0t1;
-        int sz2 = buff_len - d0t2;
-
-        int frame_planes = av_pix_fmt_count_planes(frame->format);
-        int avctx_planes = av_pix_fmt_count_planes(avctx->sw_pix_fmt);
-        int avctx_pix_planes = av_pix_fmt_count_planes(avctx->pix_fmt);
-
-        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(frame->format);
-
-        int hshift, vshift;
-        ret = av_pix_fmt_get_chroma_sub_sample(avctx->pix_fmt, &hshift, &vshift);
-
-        int plane_linesz[4] = { 0 };
-
-        for (int plane = 0; plane < frame_planes; plane++) {
-            plane_linesz[plane] = av_image_get_linesize(frame->format, frame->width, plane);
-        }
-
-        av_log(avctx, AV_LOG_VERBOSE, "mf_copy_imfsample_to_avframe - plane sizes: Y (%d), U (%d), V (%d)\n"
-            "                               image sizes: WxH (%d), W/2 (%d), H/2 (%d), P (%d)\n"
-            "                               buffer difference: Len-Parts: (%d)\n"
-            "                               format: %s / %s\n"
-            "                               chroma subsample shifts: Horz (%d), Vert (%d)\n"
-            "                               line sizes: Y (%d), U (%d), V (%d)\n",
-            sz0, sz1, sz2,
-            frame->width, frame->width / 2, frame->height / 2, frame_planes,
-            buff_len - sz0 - sz1 - sz2,
-            desc->name, desc->alias,
-            hshift, vshift,
-            plane_linesz[0], plane_linesz[1], plane_linesz[2]);
-    }
-#endif
-
-    if (frame->data && data) {
-        frame->data[0] = data;
-
-        int plane_linesz[4] = { 0 };
-        ptrdiff_t linesizes[4];
-        size_t ptrofs_sz[4];
-
-        if ((ret = av_image_fill_linesizes(plane_linesz, frame->format, frame->width)) < 0)
-            return AVERROR_INVALIDDATA;
-
-        for (int i = 0; i < 4; i++) {
-            linesizes[i] = plane_linesz[i];
-        }
-
-        if ((ret = av_image_fill_plane_sizes(ptrofs_sz, avctx->pix_fmt, avctx->height, linesizes)) < 0)
-            return AVERROR_EXTERNAL;
-
-        int u_offset = ptrofs_sz[0] + 4 * plane_linesz[0];
-        int v_offset = u_offset + ptrofs_sz[1];
-
-        frame->data[1] = frame->data[0] + u_offset;
-        frame->data[2] = frame->data[0] + v_offset;
-    }
-
-    return ret;
-}
-
-static int mf_copy_imfsample_to_avframe(AVCodecContext* avctx, IMFSample* sample, AVFrame* frame)
-{
-    MFDecoderContext* c = avctx->priv_data;
-    DWORD bufferCount;
     IMFMediaBuffer* media_buffer;
-    DWORD buff_len;
-    HRESULT hr = IMFSample_ConvertToContiguousBuffer(sample, &media_buffer);
     int ret;
 
-    if (!FAILED(hr)) {
-        BYTE* data;
-        hr = IMFMediaBuffer_Lock(media_buffer, &data, NULL, &buff_len);
+    if (!frame || !sample) {
+        ret = AVERROR_INVALIDDATA;
+    } 
+    else {
+        HRESULT hr = IMFSample_ConvertToContiguousBuffer(sample, &media_buffer);
+        DWORD buff_len;
 
         if (FAILED(hr)) {
-            IMFMediaBuffer_Release(media_buffer);
-            return AVERROR_EXTERNAL;
+            ret = AVERROR_EXTERNAL;
+        } 
+        else {
+            BYTE* data;
+            hr = IMFMediaBuffer_Lock(media_buffer, &data, NULL, &buff_len);
+
+            if (FAILED(hr)) {
+                ret = AVERROR_EXTERNAL;
+            } 
+            else {
+                int plane_linesz[4] = { 0 };
+                ptrdiff_t linesizes[4];
+                size_t ptrofs_sz[4];
+
+                if ((ret = av_image_fill_linesizes(plane_linesz, frame->format, frame->width)) < 0) {
+                    ret = AVERROR_INVALIDDATA;
+                }
+                else {
+                    for (int i = 0; i < 4; i++) {
+                        linesizes[i] = plane_linesz[i];
+                    }
+
+                    if ((ret = av_image_fill_plane_sizes(ptrofs_sz, avctx->pix_fmt, avctx->height, linesizes)) < 0) {
+                        ret = AVERROR_INVALIDDATA;
+                    }
+                    else {
+                        frame->data[0] = data;
+
+                        int u_offset = ptrofs_sz[0] + 4 * plane_linesz[0];
+                        int v_offset = u_offset + ptrofs_sz[1];
+
+                        frame->data[1] = frame->data[0] + u_offset;
+                        frame->data[2] = frame->data[0] + v_offset;
+
+                        FrameDecodeData* fdd = (FrameDecodeData*)frame->private_ref->data;
+                        MFFrameRef *ref = av_malloc(sizeof(*ref));
+                        ref->mf_buffer = media_buffer;
+                        ref->avcodec_ref = avctx;
+
+                        fdd->post_process_opaque = ref;
+                        fdd->post_process_opaque_free = mf_free_media_buffer_ref;
+                    }
+                }
+            }
         }
-
-        ret = mf_adjust_sample_frame_data_pointers(avctx, frame, data);
-
-        FrameDecodeData* fdd = (FrameDecodeData*)frame->private_ref->data;
-        MFFrameRef ref = {
-            .mf_buffer = media_buffer,
-            .avcodec_ref = avctx,
-        };
-
-        fdd->post_process_opaque = av_buffer_ref(&ref);
-        fdd->post_process_opaque_free = mf_free_media_buffer_ref;
     }
+
+    if (ret < 0 && media_buffer)
+        IMFMediaBuffer_Release(media_buffer);
 
     return ret;
 }
@@ -2519,7 +2486,7 @@ static int mf_sample_to_v_avframe(AVCodecContext *avctx, IMFSample *sample, AVFr
     av_frame_unref(frame);
     
     if ((ret = internal_get_buffer(avctx, frame, 0)) >= 0) {
-        ret = mf_copy_imfsample_to_avframe(avctx, sample, frame);
+        ret = mf_set_avframe_data_from_sample(avctx, sample, frame);
     }
 
     // logging result 
