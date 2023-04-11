@@ -282,11 +282,6 @@ static int initialize_modules_once(struct async_context *actx,
 
     TRACE(actx, "initialize modules");
 
-#if (defined(_WIN32) && defined(_DEBUG))
-     // while (!IsDebuggerPresent()) Sleep(100);
-#endif
-
-
     if ((ret = sxpi_demuxing_init(actx->log_ctx,
                                   actx->demuxer,
                                   actx->src_queue, actx->pkt_queue,
@@ -617,6 +612,10 @@ static void *control_thread(void *arg)
     struct async_context *actx = arg;
 
     LOG(actx, INFO, "starting");
+
+#if (defined(_WIN32) && defined(_DEBUG))
+    // while (!IsDebuggerPresent()) Sleep(100);
+#endif
 
     sxpi_set_thread_name("sxp/control");
 

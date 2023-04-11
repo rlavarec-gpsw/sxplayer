@@ -28,7 +28,7 @@
 #include "msg.h"
 #include "log.h"
 
-#if defined(_WIN32)
+#if defined(xxx_WIN32)
 extern const struct decoder sxpi_decoder_mediaf_sw;
 extern const struct decoder sxpi_decoder_mediaf_hw;
 static const struct decoder *decoder_def_software = &sxpi_decoder_mediaf_sw;
@@ -38,7 +38,7 @@ extern const struct decoder sxpi_decoder_ffmpeg_hw;
 static const struct decoder *decoder_def_software = &sxpi_decoder_ffmpeg_sw;
 #endif
 
-#if defined(_WIN32)
+#if defined(xxx_WIN32)
 static const struct decoder* decoder_def_hwaccel = NULL; // &sxpi_decoder_mediaf_hw;
 #elif __APPLE__
 extern const struct decoder sxpi_decoder_vt;
